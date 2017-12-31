@@ -22,7 +22,8 @@ dbo = None
 
 # API details
 scope = ["https://spreadsheets.google.com/feeds"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("client_secret.json",scope)
+credentials_file = "client_secret.json"
+creds = None
 
 # TODO: Scrape all up the global variables to be within a single object and populate them from settings.cfg
 # Global object variables
@@ -79,6 +80,11 @@ def start_client():
     # Clear any previous client instance
     global client
     client = None
+
+    global creds
+    global credentials_file
+    global scope
+    creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_file,scope)
     
     global client_authorized    
     client_authorized = False
@@ -92,7 +98,7 @@ def start_client():
     except:
         printError('Could not authorize the client instance, try checking the Oauth2 credential json.')
         raise
-def open_spreadsheet(key_or_name):
+def open_spreadsheet(key_name_or_url):
     # Make sure the client has been started
     global client
     global client_authorized
@@ -102,16 +108,23 @@ def open_spreadsheet(key_or_name):
         assert client_authorized, "The client is not authorized"
     
     # attempt to open the sheet
-    printInfo('Attempting to open sheet ' + key_or_name)
+    printInfo('Attempting to open sheet ' + key_name_or_url)
+    global spreadsheet_opened
     try:
-        document = client.open(key_or_name)
-        printSuccess('Spreadsheet ' + key_or_name + ' successfully opened')
-        global spreadsheet_opened
-        spreadsheet_opened = True
-        return document
+        document = client.open(key_name_or_url)
     except:
-        printError('Could not open the sheet ' + key_or_name + ', please ensure that the provided Oauth2 credentials are allowed to access the document and that the correct document is selected.')
-        raise
+        try:
+            document = client.open_by_url(key_name_or_url)
+        except:
+            try:
+                document = client.open_by_key(key_name_or_url)
+            except:
+                printError('Could not open the sheet ' + key_name_or_url + ', please ensure that the provided Oauth2 credentials are allowed to access the document and that the correct document is selected.')
+                raise
+
+    spreadsheet_opened = True
+    printSuccess('Spreadsheet ' + key_name_or_url + ' successfully opened')
+    return document
 def open_worksheet(worksheet_name):
     # Make the spreadsheet is opened
     global spreadsheet
@@ -190,44 +203,64 @@ def First_Time_Setup(settings_filename = 'settings.cfg'):
     # make sure we have an admin email
     if settings_file.Administrator_Email == '':
         printWarning('There is no Administrator_Email provided in the settings file "'+settings_filename+'". Please provide an email before continuing')
-        # TODO prompt user for email
+        printMessage('Would you like to provide an email now?(y/n)')
+        ans = input('(y/n)>').lower()
+        if ans == 'y':
+            Administrator_Email = input('(Administrator_Email)>')
     
     # Make sure the provided credentials work/exist
-    '''
+    global credentials_file
     try:
         if os.path.isfile(credentials_file):
             global client
             client = start_client()
         else:
-            printWarning('There are no Oauth2 credentials with the file name "' + credentials_file +'". Please refer to README to find information on how to generate these.')
+            printWarning('There are no Oauth2 credentials with the file name "' + credentials_file +'". Please refer to README to find information on how to generate one.')
             raise #TODO add custom errors
     except:
-        printWarning('The Oauth2 credentials are invalid. Please check your credentials file and refer to README.md.')
+        printWarning('The Oauth2 credentials in "'+credentials_file+'" are invalid. Please check your credentials file and refer to README.md.')
         raise
-    '''
-    # Make sure the spreadsheet exists
-    '''
-    if settings.sheet(name/key/url) == '':
-        printWarning('No name, key, or url have been provided')
+    
+    # Make sure the spreadsheet exists and can be opened, or if it needs to be generated
+    if settings.Google_Sheet_key + settings.Google_Sheet_Name + settings.Google_Sheet_URL == '':
+        printWarning('No name, key, or url have been provided in the settings file.')
+        printWarning('If you wish to use an existing sheet, please add the email in "'+settings_filename+'" to the sheet and then put the name, url, or key of the sheet in "'+settings_filename+'"')
+        printWarning('If you wish for the manager to create a new sheet and add the Administrator email automatically, please specify both an Administrator_Email and Google_Sheet_Name in "'+settings_filename+'"')
         exit()
-    try: # cascading open by name, url, key
-        # TODO: open_worksheet_url
-        # TODO: open_worksheet_key
+    
+    global spreadsheet
+    try: # try by name, key, url
+        spreadsheet = open_spreadsheet(settings.Google_Sheet_Name)
     except:
-        # TODO: prompt user to either check the settings file or have the sheet generated
-    '''
+        try:
+            spreadsheet = open_spreadsheet(settings.Google_Sheet_key)
+        except:
+            try:
+                spreadsheet = open_spreadsheet(settings.Google_Sheet_URL)
+            except:
+                printWarning('The google sheet specified could not be opened, make sure you have shared access to the email in "'+credentials_file+'"')
+                if settings.Administrator_Email != '' and settings.Google_Sheet_Name != ''
+                    printMessage('Would you like to try to make a new Google sheet with the settings specified?')
+                    ans = input('(y/n)>').lower()
+                    if ans == 'y':
+                        # make new spreadsheet
+                        client.create(settings.Google_Sheet_Name)
+
+                        # add admin_email
+                        spreadsheet = open_spreadsheet(settings.Google_Sheet_Name)
+                        spreadsheet.share(settings.Administrator_Email, perm_type='user', role='writer')
 
     # check worksheets or generate
     '''
     try:
         open_worksheet control panel
     except:
-        would you like to generate the control panel?
+        generate control panel
 
     try:
         open_worksheet roster
     except:
-        would you like to generate a new roster?
+        generate roster
 
     try:
         open_worksheet signins
@@ -263,7 +296,7 @@ def Generate_Settings_File(filename = 'settings.cfg'):
     settings.write("# This value is required for first time setup to be run\n")
     settings.write("Administrator_Email=\n")
     settings.close()
-    printSuccess('A new settings file has been generated')
+    printSuccess('Generating a new settings file ' + settings_filename)
     return
 def Load_Settings_File(filename = 'settings.cfg'):
     loaded_settings = [line.split('=') for line in open(filename,'r').read().split('\n')]
@@ -697,10 +730,14 @@ def main():
     try:
         Load_Settings_File(settings_filename)
         # client = start_client()
+        printMessage('Settings loaded and client started')
     except:
-        First_Time_Setup(settings_filename)
-    #exit()
     '''
+    First_Time_Setup(settings_filename)
+    printMessage('First time setup finished')
+    
+    exit()
+
 
     #Loop through tasks
     current_cycle = 0
@@ -760,7 +797,7 @@ if __name__ == "__main__":
     except SystemExit:
         printWarning('Program is terminating.')
     except:
-        printError('An handled error has occured.')
+        printError('An unhandled error has occured.')
         raise
  
 
